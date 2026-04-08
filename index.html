@@ -1,24 +1,96 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Pitch Monitor</title>
-  <link rel="stylesheet" href="styles.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pitch Monitor Pro</title>
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Real-Time Vocal Tracking</p>
+        <h1>Pitch Monitor</h1>
+      </div>
 
-<h1>🎤 Pitch Monitor</h1>
+      <div class="controls">
+        <button id="startBtn">Start Monitoring</button>
+      </div>
+    </header>
 
-<button id="startBtn">Start Monitoring</button>
+    <main class="main-layout">
+      <aside class="sidebar">
+        <div class="panel piano-panel">
+          <div class="panel-header">
+            <h2>Piano</h2>
+            <p>Detected pitch position</p>
+          </div>
+          <div id="piano" class="piano"></div>
+        </div>
+      </aside>
 
-<div class="display">
-  <h2 id="note">--</h2>
-  <p id="frequency">0 Hz</p>
-  <p id="cents">0 cents</p>
-</div>
+      <section class="content">
+        <div class="hero-grid">
+          <div class="panel big-readout">
+            <div class="readout-top">
+              <div>
+                <p class="label">Detected Note</p>
+                <div class="note-line">
+                  <span id="note">--</span>
+                </div>
+              </div>
 
-<canvas id="graph" width="800" height="200"></canvas>
+              <div class="status-pill" id="pitchStatus">Waiting for input</div>
+            </div>
 
-<script src="app.js"></script>
+            <div class="stats-row">
+              <div class="stat-card">
+                <p class="label">Frequency</p>
+                <h3 id="frequency">0.00 Hz</h3>
+              </div>
+
+              <div class="stat-card">
+                <p class="label">Cents</p>
+                <h3 id="cents">0</h3>
+              </div>
+
+              <div class="stat-card">
+                <p class="label">Target</p>
+                <h3 id="targetNote">--</h3>
+              </div>
+            </div>
+
+            <div class="tuner-wrap">
+              <div class="tuner-scale">
+                <span>-50</span>
+                <span>-25</span>
+                <span>0</span>
+                <span>+25</span>
+                <span>+50</span>
+              </div>
+              <div class="tuner-bar">
+                <div class="tuner-center-line"></div>
+                <div id="tunerNeedle" class="tuner-needle"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel graph-panel">
+          <div class="panel-header">
+            <h2>Pitch Lane View</h2>
+            <p>Live note tracking over time</p>
+          </div>
+
+          <div class="graph-wrapper">
+            <canvas id="pitchCanvas" width="1200" height="620"></canvas>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
 </body>
 </html>
