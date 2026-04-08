@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Pitch Monitor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<h1>🎤 Pitch Monitor</h1>
+
+<button id="startBtn">Start Monitoring</button>
+
+<div class="display">
+  <h2 id="note">--</h2>
+  <p id="frequency">0 Hz</p>
+  <p id="cents">0 cents</p>
+</div>
+
+<canvas id="graph" width="800" height="200"></canvas>
+
+<script src="app.js"></script>
+</body>
+</html>
