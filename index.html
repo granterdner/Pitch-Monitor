@@ -14,83 +14,101 @@
         <h1>Pitch Monitor</h1>
       </div>
 
-      <div class="controls">
-        <button id="startBtn">Start Monitoring</button>
+      <div class="top-controls">
+        <div class="control-group">
+          <label for="keySelect">Key</label>
+          <select id="keySelect">
+            <option value="none">Chromatic</option>
+            <option value="C">C Major</option>
+            <option value="G">G Major</option>
+            <option value="D">D Major</option>
+            <option value="A">A Major</option>
+            <option value="E">E Major</option>
+            <option value="B">B Major</option>
+            <option value="F#">F# Major</option>
+            <option value="C#">C# Major</option>
+            <option value="F">F Major</option>
+            <option value="Bb">Bb Major</option>
+            <option value="Eb">Eb Major</option>
+            <option value="Ab">Ab Major</option>
+            <option value="Db">Db Major</option>
+          </select>
+        </div>
+
+        <div class="button-row">
+          <button id="startBtn" class="primary-btn">Start</button>
+          <button id="stopBtn" class="secondary-btn" disabled>Stop</button>
+        </div>
       </div>
     </header>
 
     <main class="main-layout">
-      <aside class="sidebar">
-        <div class="panel piano-panel">
-          <div class="panel-header">
-            <h2>Piano</h2>
-            <p>Detected pitch position</p>
-          </div>
-          <div id="piano" class="piano"></div>
-        </div>
-      </aside>
-
       <section class="content">
-        <div class="hero-grid">
-          <div class="panel big-readout">
-            <div class="readout-top">
-              <div>
-                <p class="label">Detected Note</p>
-                <div class="note-line">
-                  <span id="note">--</span>
-                </div>
-              </div>
-
-              <div class="status-pill" id="pitchStatus">Waiting for input</div>
-            </div>
-
-            <div class="stats-row">
-              <div class="stat-card">
-                <p class="label">Frequency</p>
-                <h3 id="frequency">0.00 Hz</h3>
-              </div>
-
-              <div class="stat-card">
-                <p class="label">Cents</p>
-                <h3 id="cents">0</h3>
-              </div>
-
-              <div class="stat-card">
-                <p class="label">Target</p>
-                <h3 id="targetNote">--</h3>
+        <div class="panel big-readout">
+          <div class="readout-top">
+            <div>
+              <p class="label">Detected Note</p>
+              <div class="note-line">
+                <span id="note">--</span>
               </div>
             </div>
 
-            <div class="tuner-wrap">
-              <div class="tuner-scale">
-                <span>-50</span>
-                <span>-25</span>
-                <span>0</span>
-                <span>+25</span>
-                <span>+50</span>
-              </div>
-              <div class="tuner-bar">
-                <div class="tuner-center-line"></div>
-                <div id="tunerNeedle" class="tuner-needle"></div>
-              </div>
+            <div class="status-pill" id="pitchStatus">Ready</div>
+          </div>
+
+          <div class="stats-row">
+            <div class="stat-card">
+              <p class="label">Frequency</p>
+              <h3 id="frequency">0.00 Hz</h3>
+            </div>
+
+            <div class="stat-card">
+              <p class="label">Cents</p>
+              <h3 id="cents">0 cents</h3>
+            </div>
+
+            <div class="stat-card">
+              <p class="label">Target</p>
+              <h3 id="targetNote">--</h3>
+            </div>
+          </div>
+
+          <div class="tuner-wrap">
+            <div class="tuner-scale">
+              <span>-50</span>
+              <span>-25</span>
+              <span>0</span>
+              <span>+25</span>
+              <span>+50</span>
+            </div>
+            <div class="tuner-bar">
+              <div class="tuner-center-line"></div>
+              <div id="tunerNeedle" class="tuner-needle"></div>
             </div>
           </div>
         </div>
 
         <div class="panel graph-panel">
           <div class="panel-header">
-            <h2>Pitch Lane View</h2>
-            <p>Live note tracking over time</p>
+            <div>
+              <h2>Pitch Roll</h2>
+              <p>Piano-roll style tracking with live key highlighting</p>
+            </div>
+            <div class="legend">
+              <span class="legend-item"><span class="dot inkey"></span>In key</span>
+              <span class="legend-item"><span class="dot pitchdot"></span>Pitch path</span>
+            </div>
           </div>
 
-          <div class="graph-wrapper">
-            <canvas id="pitchCanvas" width="1200" height="620"></canvas>
+          <div class="roll-wrap">
+            <div id="pianoRollKeyboard" class="piano-roll-keyboard"></div>
+            <canvas id="pitchCanvas" width="1400" height="700"></canvas>
           </div>
         </div>
       </section>
     </main>
   </div>
 
-  <script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

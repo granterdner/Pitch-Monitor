@@ -1,31 +1,59 @@
+import { PitchDetector } from "https://cdn.skypack.dev/pitchy";
+
 const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+const keySelect = document.getElementById("keySelect");
+
 const noteDisplay = document.getElementById("note");
 const freqDisplay = document.getElementById("frequency");
 const centsDisplay = document.getElementById("cents");
 const targetNoteDisplay = document.getElementById("targetNote");
 const pitchStatus = document.getElementById("pitchStatus");
 const tunerNeedle = document.getElementById("tunerNeedle");
-const pianoContainer = document.getElementById("piano");
 
 const canvas = document.getElementById("pitchCanvas");
 const ctx = canvas.getContext("2d");
+const pianoRollKeyboard = document.getElementById("pianoRollKeyboard");
 
-let audioContext;
-let analyser;
-let dataArray;
-let animationId;
+const NOTE_NAMES_SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
-const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const MAJOR_SCALES = {
+  "C":  ["C", "D", "E", "F", "G", "A", "B"],
+  "G":  ["G", "A", "B", "C", "D", "E", "F#"],
+  "D":  ["D", "E", "F#", "G", "A", "B", "C#"],
+  "A":  ["A", "B", "C#", "D", "E", "F#", "G#"],
+  "E":  ["E", "F#", "G#", "A", "B", "C#", "D#"],
+  "B":  ["B", "C#", "D#", "E", "F#", "G#", "A#"],
+  "F#": ["F#", "G#", "A#", "B", "C#", "D#", "F"],
+  "C#": ["C#", "D#", "F", "F#", "G#", "A#", "C"],
+  "F":  ["F", "G", "A", "Bb", "C", "D", "E"],
+  "Bb": ["Bb", "C", "D", "Eb", "F", "G", "A"],
+  "Eb": ["Eb", "F", "G", "Ab", "Bb", "C", "D"],
+  "Ab": ["Ab", "Bb", "C", "Db", "Eb", "F", "G"],
+  "Db": ["Db", "Eb", "F", "Gb", "Ab", "Bb", "C"]
+};
+
 const A4 = 440;
 const MIN_MIDI = 48; // C3
 const MAX_MIDI = 83; // B5
 const visibleMidiNotes = [];
 const pitchTrail = [];
-const maxTrail = 240;
+const maxTrail = 260;
+
+let audioContext = null;
+let analyser = null;
+let dataArray = null;
+let detector = null;
+let inputBufferLength = 4096;
+let animationId = null;
+let micStream = null;
 
 let smoothedPitch = null;
-let currentMidi = null;
+let lastStableMidi = null;
 
+// --------------------
+// Music helpers
+// --------------------
 function midiToFreq(midi) {
   return A4 * Math.pow(2, (midi - 69) / 12);
 }
@@ -34,69 +62,137 @@ function freqToMidi(freq) {
   return 69 + 12 * Math.log2(freq / A4);
 }
 
-function midiToNoteName(midi) {
+function normalizeNoteName(name) {
+  return name.replace("Db", "C#")
+             .replace("Eb", "D#")
+             .replace("Gb", "F#")
+             .replace("Ab", "G#")
+             .replace("Bb", "A#");
+}
+
+function getDisplayNameForScale(noteName, scaleKey) {
+  if (scaleKey === "none") return noteName;
+
+  const scale = MAJOR_SCALES[scaleKey];
+  if (!scale) return noteName;
+
+  const normalizedTarget = normalizeNoteName(noteName);
+
+  for (const scaleNote of scale) {
+    if (normalizeNoteName(scaleNote) === normalizedTarget) {
+      return scaleNote;
+    }
+  }
+
+  return noteName;
+}
+
+function midiToNoteName(midi, scaleKey = "none") {
   const rounded = Math.round(midi);
-  const name = NOTE_NAMES[((rounded % 12) + 12) % 12];
+  const pitchClass = ((rounded % 12) + 12) % 12;
+  const baseName = NOTE_NAMES_SHARP[pitchClass];
   const octave = Math.floor(rounded / 12) - 1;
-  return `${name}${octave}`;
+  const displayName = getDisplayNameForScale(baseName, scaleKey);
+  return `${displayName}${octave}`;
+}
+
+function isBlackKey(midi) {
+  const n = ((midi % 12) + 12) % 12;
+  return [1, 3, 6, 8, 10].includes(n);
+}
+
+function getCurrentScalePitchClasses() {
+  const selected = keySelect.value;
+  if (selected === "none") return null;
+
+  const scale = MAJOR_SCALES[selected];
+  return new Set(scale.map(note => normalizeNoteName(note)));
+}
+
+function isMidiInSelectedScale(midi) {
+  const scaleSet = getCurrentScalePitchClasses();
+  if (!scaleSet) return false;
+
+  const pitchClass = ((midi % 12) + 12) % 12;
+  const name = NOTE_NAMES_SHARP[pitchClass];
+  return scaleSet.has(normalizeNoteName(name));
+}
+
+function getNearestScaleMidi(midiFloat) {
+  const scaleSet = getCurrentScalePitchClasses();
+  if (!scaleSet) return Math.round(midiFloat);
+
+  let bestMidi = Math.round(midiFloat);
+  let bestDist = Infinity;
+
+  for (let midi = MIN_MIDI; midi <= MAX_MIDI; midi++) {
+    const pitchClass = ((midi % 12) + 12) % 12;
+    const name = NOTE_NAMES_SHARP[pitchClass];
+
+    if (scaleSet.has(normalizeNoteName(name))) {
+      const dist = Math.abs(midi - midiFloat);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestMidi = midi;
+      }
+    }
+  }
+
+  return bestMidi;
 }
 
 function getNoteData(freq) {
   const midiFloat = freqToMidi(freq);
   const midiRounded = Math.round(midiFloat);
-  const noteName = NOTE_NAMES[((midiRounded % 12) + 12) % 12];
-  const octave = Math.floor(midiRounded / 12) - 1;
-  const targetFreq = midiToFreq(midiRounded);
+  const targetMidi = getNearestScaleMidi(midiFloat);
+  const targetFreq = midiToFreq(targetMidi);
   const cents = 1200 * Math.log2(freq / targetFreq);
+
+  const pitchClass = ((midiRounded % 12) + 12) % 12;
+  const noteNameBase = NOTE_NAMES_SHARP[pitchClass];
+  const noteNameDisplay = getDisplayNameForScale(noteNameBase, keySelect.value);
+  const octave = Math.floor(midiRounded / 12) - 1;
 
   return {
     freq,
     midiFloat,
     midiRounded,
-    noteName,
+    noteName: noteNameDisplay,
     octave,
     cents,
-    targetFreq
+    targetMidi,
+    targetFreq,
+    targetNoteName: midiToNoteName(targetMidi, keySelect.value),
+    inScale: isMidiInSelectedScale(midiRounded)
   };
 }
 
-function autoCorrelate(buffer, sampleRate) {
-  const SIZE = buffer.length;
-  let rms = 0;
+// --------------------
+// Pitchy detection
+// --------------------
+function detectPitchWithPitchy() {
+  if (!analyser || !detector || !dataArray) return null;
 
-  for (let i = 0; i < SIZE; i++) {
-    const val = buffer[i];
-    rms += val * val;
+  analyser.getFloatTimeDomainData(dataArray);
+
+  const [pitch, clarity] = detector.findPitch(dataArray, audioContext.sampleRate);
+
+  // Tune these thresholds if you want more or less sensitivity
+  if (!pitch || !Number.isFinite(pitch)) return null;
+  if (pitch < 70 || pitch > 1200) return null;
+  if (clarity < 0.88) return null;
+
+  return { pitch, clarity };
+}
+
+// --------------------
+// Canvas / keyboard layout
+// --------------------
+function buildVisibleNotes() {
+  visibleMidiNotes.length = 0;
+  for (let midi = MAX_MIDI; midi >= MIN_MIDI; midi--) {
+    visibleMidiNotes.push(midi);
   }
-
-  rms = Math.sqrt(rms / SIZE);
-  if (rms < 0.012) return -1;
-
-  let bestOffset = -1;
-  let bestCorrelation = 0;
-  const correlations = new Array(SIZE).fill(0);
-
-  for (let offset = 8; offset < SIZE / 2; offset++) {
-    let correlation = 0;
-
-    for (let i = 0; i < SIZE / 2; i++) {
-      correlation += Math.abs(buffer[i] - buffer[i + offset]);
-    }
-
-    correlation = 1 - correlation / (SIZE / 2);
-    correlations[offset] = correlation;
-
-    if (correlation > bestCorrelation) {
-      bestCorrelation = correlation;
-      bestOffset = offset;
-    }
-  }
-
-  if (bestCorrelation > 0.9 && bestOffset !== -1) {
-    return sampleRate / bestOffset;
-  }
-
-  return -1;
 }
 
 function resizeCanvasForDisplay() {
@@ -108,45 +204,53 @@ function resizeCanvasForDisplay() {
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
 }
 
-function buildVisibleNotes() {
-  visibleMidiNotes.length = 0;
-  for (let midi = MAX_MIDI; midi >= MIN_MIDI; midi--) {
-    visibleMidiNotes.push(midi);
-  }
+function getLaneHeight() {
+  return canvas.clientHeight / visibleMidiNotes.length;
 }
 
-function isBlackKey(midi) {
-  const n = ((midi % 12) + 12) % 12;
-  return [1, 3, 6, 8, 10].includes(n);
-}
+function buildRollKeyboard() {
+  pianoRollKeyboard.innerHTML = "";
+  const laneHeight = getLaneHeight();
 
-function buildPiano() {
-  pianoContainer.innerHTML = "";
-
-  for (let midi = MAX_MIDI; midi >= MIN_MIDI; midi--) {
+  for (let index = 0; index < visibleMidiNotes.length; index++) {
+    const midi = visibleMidiNotes[index];
     const key = document.createElement("div");
-    key.className = `piano-key ${isBlackKey(midi) ? "black" : "white"}`;
+    key.className = `roll-key ${isBlackKey(midi) ? "black" : "white"}`;
     key.dataset.midi = midi;
+    key.style.top = `${index * laneHeight}px`;
+    key.style.height = `${laneHeight}px`;
 
-    const left = document.createElement("span");
-    left.textContent = midiToNoteName(midi);
+    const noteSpan = document.createElement("span");
+    noteSpan.textContent = midiToNoteName(midi, keySelect.value);
 
-    const right = document.createElement("span");
-    right.textContent = `${midiToFreq(midi).toFixed(1)} Hz`;
-
-    key.appendChild(left);
-    key.appendChild(right);
-    pianoContainer.appendChild(key);
+    key.appendChild(noteSpan);
+    pianoRollKeyboard.appendChild(key);
   }
+
+  updateKeyboardScaleHighlight();
 }
 
-function updatePianoHighlight(midiRounded) {
-  const keys = pianoContainer.querySelectorAll(".piano-key");
-  keys.forEach(key => {
+function updateKeyboardScaleHighlight() {
+  const keys = pianoRollKeyboard.querySelectorAll(".roll-key");
+  keys.forEach((key) => {
+    const midi = Number(key.dataset.midi);
+    key.classList.toggle("in-key", isMidiInSelectedScale(midi));
+    key.classList.toggle("active", midi === lastStableMidi);
+    key.firstChild.textContent = midiToNoteName(midi, keySelect.value);
+  });
+}
+
+function updateKeyboardActive(midiRounded) {
+  lastStableMidi = midiRounded;
+  const keys = pianoRollKeyboard.querySelectorAll(".roll-key");
+  keys.forEach((key) => {
     key.classList.toggle("active", Number(key.dataset.midi) === midiRounded);
   });
 }
 
+// --------------------
+// UI updates
+// --------------------
 function centsToStatus(cents) {
   const abs = Math.abs(cents);
   if (abs < 8) return { text: "In tune", color: "var(--success)" };
@@ -158,10 +262,14 @@ function updateReadout(data) {
   noteDisplay.textContent = `${data.noteName}${data.octave}`;
   freqDisplay.textContent = `${data.freq.toFixed(2)} Hz`;
   centsDisplay.textContent = `${data.cents > 0 ? "+" : ""}${Math.round(data.cents)} cents`;
-  targetNoteDisplay.textContent = `${data.noteName}${data.octave} • ${data.targetFreq.toFixed(2)} Hz`;
+  targetNoteDisplay.textContent = `${data.targetNoteName} • ${data.targetFreq.toFixed(2)} Hz`;
 
   const status = centsToStatus(data.cents);
-  pitchStatus.textContent = status.text;
+  pitchStatus.textContent =
+    data.inScale || keySelect.value === "none"
+      ? status.text
+      : `${status.text} • out of key`;
+
   pitchStatus.style.color = "#effcff";
   pitchStatus.style.background = `${status.color}22`;
   pitchStatus.style.borderColor = `${status.color}55`;
@@ -170,57 +278,62 @@ function updateReadout(data) {
   const percent = ((clamped + 50) / 100) * 100;
   tunerNeedle.style.left = `${percent}%`;
 
-  updatePianoHighlight(data.midiRounded);
+  updateKeyboardActive(data.midiRounded);
 }
 
 function showNoPitch() {
   noteDisplay.textContent = "--";
   freqDisplay.textContent = "0.00 Hz";
   centsDisplay.textContent = "0 cents";
-  targetNoteDisplay.textContent = "--";
-  pitchStatus.textContent = "Listening...";
+  targetNoteDisplay.textContent = keySelect.value === "none" ? "--" : `${keySelect.value} Major`;
+  pitchStatus.textContent = audioContext ? "Listening..." : "Ready";
   pitchStatus.style.background = "rgba(103, 232, 249, 0.12)";
   pitchStatus.style.borderColor = "rgba(103, 232, 249, 0.2)";
   tunerNeedle.style.left = "50%";
-  updatePianoHighlight(null);
+  updateKeyboardActive(null);
 }
 
+// --------------------
+// Drawing
+// --------------------
 function getYForMidi(midiFloat) {
-  const total = MAX_MIDI - MIN_MIDI + 1;
-  const laneHeight = canvas.clientHeight / total;
+  const laneHeight = getLaneHeight();
   return (MAX_MIDI - midiFloat + 0.5) * laneHeight;
 }
 
 function drawBackgroundGrid() {
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
-  const total = visibleMidiNotes.length;
-  const laneHeight = h / total;
+  const laneHeight = getLaneHeight();
 
   ctx.clearRect(0, 0, w, h);
 
-  for (let i = 0; i < total; i++) {
+  for (let i = 0; i < visibleMidiNotes.length; i++) {
     const midi = visibleMidiNotes[i];
     const y = i * laneHeight;
     const black = isBlackKey(midi);
+    const inKey = isMidiInSelectedScale(midi);
 
-    ctx.fillStyle = black ? "rgba(82, 98, 124, 0.20)" : "rgba(255,255,255,0.03)";
-    if (i % 2 === 0 && !black) {
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-    }
+    let fill = black ? "rgba(78, 91, 116, 0.18)" : "rgba(255,255,255,0.03)";
+    if (!black && i % 2 === 0) fill = "rgba(255,255,255,0.05)";
+    if (inKey) fill = black ? "rgba(103,232,249,0.12)" : "rgba(103,232,249,0.08)";
+
+    ctx.fillStyle = fill;
     ctx.fillRect(0, y, w, laneHeight);
 
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeStyle = inKey ? "rgba(103,232,249,0.18)" : "rgba(255,255,255,0.08)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(w, y);
     ctx.stroke();
 
-    ctx.fillStyle = black ? "rgba(225,235,255,0.9)" : "rgba(180,197,225,0.9)";
+    ctx.fillStyle = inKey
+      ? "rgba(210,247,255,0.92)"
+      : (black ? "rgba(225,235,255,0.9)" : "rgba(180,197,225,0.9)");
     ctx.font = "12px Inter, sans-serif";
     ctx.textBaseline = "middle";
-    ctx.fillText(midiToNoteName(midi), 12, y + laneHeight / 2);
+    ctx.fillText(midiToNoteName(midi, keySelect.value), 10, y + laneHeight / 2);
   }
 
   ctx.strokeStyle = "rgba(255,255,255,0.12)";
@@ -230,50 +343,59 @@ function drawBackgroundGrid() {
   ctx.stroke();
 }
 
-function drawPitchTrail() {
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
-
+function drawSmoothTrail() {
   drawBackgroundGrid();
 
-  if (pitchTrail.length < 2) return;
+  const points = [];
+  const stepX = canvas.clientWidth / Math.max(1, maxTrail - 1);
 
-  const stepX = w / Math.max(1, maxTrail - 1);
-
-  for (let i = 1; i < pitchTrail.length; i++) {
-    const prev = pitchTrail[i - 1];
-    const curr = pitchTrail[i];
-
-    if (prev === null || curr === null) continue;
-
-    const x1 = (i - 1) * stepX;
-    const x2 = i * stepX;
-    const y1 = getYForMidi(prev);
-    const y2 = getYForMidi(curr);
-
-    const alpha = i / pitchTrail.length;
-    ctx.strokeStyle = `rgba(103, 232, 249, ${0.2 + alpha * 0.8})`;
-    ctx.lineWidth = 4;
-    ctx.lineCap = "round";
-
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
+  for (let i = 0; i < pitchTrail.length; i++) {
+    if (pitchTrail[i] !== null) {
+      points.push({
+        x: i * stepX,
+        y: getYForMidi(pitchTrail[i])
+      });
+    }
   }
 
-  const latest = pitchTrail[pitchTrail.length - 1];
-  if (latest !== null) {
-    const x = (pitchTrail.length - 1) * stepX;
-    const y = getYForMidi(latest);
+  if (points.length < 2) return;
+
+  ctx.save();
+  ctx.lineWidth = 4;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "rgba(126, 240, 255, 0.95)";
+  ctx.shadowColor = "rgba(103,232,249,0.30)";
+  ctx.shadowBlur = 12;
+
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const current = points[i];
+    const next = points[i + 1];
+    const midX = (current.x + next.x) / 2;
+    const midY = (current.y + next.y) / 2;
+    ctx.quadraticCurveTo(current.x, current.y, midX, midY);
+  }
+
+  const last = points[points.length - 1];
+  ctx.lineTo(last.x, last.y);
+  ctx.stroke();
+  ctx.restore();
+
+  const latestTrailValue = pitchTrail[pitchTrail.length - 1];
+  if (latestTrailValue !== null) {
+    const latestX = (pitchTrail.length - 1) * stepX;
+    const latestY = getYForMidi(latestTrailValue);
 
     ctx.beginPath();
-    ctx.arc(x, y, 8, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.arc(latestX, latestY, 8, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.98)";
     ctx.fill();
 
     ctx.beginPath();
-    ctx.arc(x, y, 16, 0, Math.PI * 2);
+    ctx.arc(latestX, latestY, 16, 0, Math.PI * 2);
     ctx.strokeStyle = "rgba(103,232,249,0.35)";
     ctx.lineWidth = 3;
     ctx.stroke();
@@ -287,33 +409,52 @@ function pushPitchPoint(midiFloatOrNull) {
   }
 }
 
-function updatePitch() {
-  analyser.getFloatTimeDomainData(dataArray);
-  const detected = autoCorrelate(dataArray, audioContext.sampleRate);
+function clearPitchTrail() {
+  pitchTrail.length = 0;
+}
 
-  if (detected !== -1 && detected >= 70 && detected <= 1200) {
-    smoothedPitch = smoothedPitch == null ? detected : smoothedPitch * 0.82 + detected * 0.18;
+// --------------------
+// Main update loop
+// --------------------
+function updatePitch() {
+  if (!analyser || !audioContext || !detector) return;
+
+  const result = detectPitchWithPitchy();
+
+  if (result) {
+    const detected = result.pitch;
+
+    smoothedPitch = smoothedPitch == null
+      ? detected
+      : smoothedPitch * 0.84 + detected * 0.16;
+
     const data = getNoteData(smoothedPitch);
-    currentMidi = data.midiRounded;
     updateReadout(data);
     pushPitchPoint(data.midiFloat);
   } else {
     smoothedPitch = null;
-    currentMidi = null;
     showNoPitch();
     pushPitchPoint(null);
   }
 
-  drawPitchTrail();
+  drawSmoothTrail();
   animationId = requestAnimationFrame(updatePitch);
 }
 
+// --------------------
+// Controls
+// --------------------
 async function startMonitoring() {
   if (audioContext) return;
 
   try {
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const stream = await navigator.mediaDevices.getUserMedia({
+
+    if (audioContext.state === "suspended") {
+      await audioContext.resume();
+    }
+
+    micStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
@@ -321,32 +462,83 @@ async function startMonitoring() {
       }
     });
 
-    const source = audioContext.createMediaStreamSource(stream);
+    const source = audioContext.createMediaStreamSource(micStream);
+
     analyser = audioContext.createAnalyser();
-    analyser.fftSize = 2048;
+    analyser.fftSize = inputBufferLength;
+    analyser.smoothingTimeConstant = 0;
+
     dataArray = new Float32Array(analyser.fftSize);
+    detector = PitchDetector.forFloat32Array(analyser.fftSize);
 
     source.connect(analyser);
 
-    startBtn.textContent = "Monitoring...";
-    startBtn.disabled = true;
+    clearPitchTrail();
+    smoothedPitch = null;
 
-    updatePitch();
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+
+    pitchStatus.textContent = "Listening...";
+    animationId = requestAnimationFrame(updatePitch);
   } catch (error) {
-    alert("Microphone access failed. Please allow mic access and try again.");
+    alert("Microphone access failed. Please allow microphone access and try again.");
     console.error(error);
   }
 }
 
+function stopMonitoring() {
+  if (animationId) {
+    cancelAnimationFrame(animationId);
+    animationId = null;
+  }
+
+  if (micStream) {
+    micStream.getTracks().forEach((track) => track.stop());
+    micStream = null;
+  }
+
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+  }
+
+  analyser = null;
+  dataArray = null;
+  detector = null;
+  smoothedPitch = null;
+
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+
+  showNoPitch();
+  drawSmoothTrail();
+}
+
+function handleScaleChange() {
+  updateKeyboardScaleHighlight();
+  drawSmoothTrail();
+
+  if (!audioContext) {
+    showNoPitch();
+  }
+}
+
+// --------------------
+// Init
+// --------------------
 window.addEventListener("resize", () => {
   resizeCanvasForDisplay();
-  drawPitchTrail();
+  buildRollKeyboard();
+  drawSmoothTrail();
 });
 
 startBtn.addEventListener("click", startMonitoring);
+stopBtn.addEventListener("click", stopMonitoring);
+keySelect.addEventListener("change", handleScaleChange);
 
 buildVisibleNotes();
-buildPiano();
 resizeCanvasForDisplay();
-drawPitchTrail();
+buildRollKeyboard();
+drawSmoothTrail();
 showNoPitch();
